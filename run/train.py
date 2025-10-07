@@ -7,6 +7,47 @@ import dowel_wrapper
 assert dowel_wrapper is not None
 import dowel
 
+import wandb
+
+from dowel import tabular
+from dowel import logger as dowel_logger
+
+from dowel import LogOutput
+import wandb
+
+
+from dowel import LogOutput
+import wandb
+import torch.multiprocessing as mp
+import dowel_wrapper
+
+class WandbOutput(LogOutput):
+    def record(self, data, prefix=''):
+        pass
+
+    def dump(self, step=None):
+        for phase in ["train", "eval"]:
+            tab = dowel_wrapper.get_tabular(phase)
+            metrics = tab.as_dict if hasattr(tab, "as_dict") else tab
+            if not metrics:
+                continue
+
+            step_val = metrics.get("TotalEpoch") or metrics.get(f"{phase.capitalize()}Sp/Iteration") or step
+            if mp.current_process().name == "MainProcess":
+                print(f"wandb.dump() logging {len(metrics)} metrics from {phase}, step: {step_val}")
+                wandb.log(metrics, step=step_val)
+
+        print("Eval logger dump_all called")
+            
+wandb_output = WandbOutput()
+
+for phase in ['train', 'eval']:
+    try:
+        dowel_wrapper.get_dowel(phase).logger.add_output(wandb_output)
+    except Exception as e:
+        print(f"Skipping phase {phase}: {e}")
+
+
 import argparse
 import datetime
 import functools
@@ -344,10 +385,15 @@ def get_argparser():
 args = get_argparser().parse_args()
 g_start_time = int(datetime.datetime.now().timestamp())
 
+
 @wrap_experiment(log_dir=get_log_dir(args, g_start_time, EXP_DIR), name=get_exp_name(args, g_start_time)[0])
 def run(ctxt=None):
     # Print argparse arguments
     dowel.logger.log('ARGS: ' + str(args))
+
+
+
+
 
     # Set number of threads
     if args.n_thread is not None:
@@ -970,6 +1016,24 @@ def run(ctxt=None):
     runner.train(n_epochs=args.n_epochs, batch_size=args.traj_batch_size)
 
 
+
 if __name__ == '__main__':
+
+    import torch.multiprocessing as mp
+    import os
     mp.set_start_method(START_METHOD)
+
+     # Only the main process initializes wandb
+    if mp.current_process().name == "MainProcess" and wandb.run is None:
+        os.environ["WANDB_START_METHOD"] = "thread"
+        wandb.init(
+            project='iod',
+            group=args.run_group,
+            name=get_exp_name(args, g_start_time)[0],
+            config=vars(args),
+            dir=get_log_dir(args, g_start_time, EXP_DIR),
+            mode="online",
+        )
+    else:
+        os.environ["WANDB_MODE"] = "disabled"
     run()
